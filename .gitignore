@@ -1,0 +1,16 @@
+.venv/
+venv/
+__pycache__/
+.env
+*.pyc
+OLD/
+found-non-passage.txt
+*.zip
+artifacts/
+thử_chunk_lookalike.txt
+*.docx
+tmp/
+selected-contexts/
+split/
+
+

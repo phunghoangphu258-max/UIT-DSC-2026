@@ -1,0 +1,4 @@
+# Unsloth owns the compatible Torch/Transformers/PEFT/bitsandbytes stack.
+unsloth==2026.8.19
+unsloth-zoo==2026.8.13
+tensorboard==2.19.0
