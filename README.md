@@ -20,6 +20,10 @@ Mỗi chunk lặp lại đầy đủ đường dẫn tên văn bản → phần 
 
 ## Cài đặt
 
+### Tải các artifact cơ bản
+https://drive.google.com/drive/folders/1sWMBdbc1t1nFMj14LnnC1PKPJYB13rnG?usp=sharing
+
+### Dependency
 ```powershell
 python -m pip install -r codebase/requirements-legalir.txt
 ```
@@ -120,7 +124,7 @@ Các bước train:
 ```text
 chuẩn bị train/test -> tạo câu trả lời mẫu bằng retrieve không rerank -> tạo các cặp positive/negative -> training
 ```
-
+Pipeline train:
 ```powershell 
 # Split Train-Test
 python codebase/legalir.py split
