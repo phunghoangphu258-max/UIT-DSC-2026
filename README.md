@@ -6,7 +6,7 @@ Một repo với pipeline cơ bản cho kỳ thi UIT-DSC-2026.
 Pipeline offline tối giản cho UIT DSC 2026 Task 1:
 
 ```text
-Điều-first hierarchical chunking -> BM25 heading/body + Vietnamese_Embedding_v2/FAISS -> weighted RRF
+Điều-first hierarchical chunking-> BM25 heading/body + Vietnamese_Embedding_v2/FAISS -> weighted RRF
 -> top-n average theo document -> unique top-5 -> submission.zip
 ```
 
@@ -24,25 +24,30 @@ Mỗi chunk lặp lại đầy đủ đường dẫn tên văn bản → phần 
 python -m pip install -r codebase/requirements-legalir.txt
 ```
 
-Trên Kaggle, cài requirement trước khi import NumPy/SciPy; nếu đã import hoặc vừa
-thay phiên bản các gói binary này, restart session một lần sau khi cài.
-
-Trên Kaggle không bật Internet, attach hai model dưới dạng Kaggle Model/Dataset và
-truyền đường dẫn local vào `--model`, ví dụ `/kaggle/input/vietnamese-embedding-v2`
-cho `legalir.py` và `/kaggle/input/qwen3-0.6b` cho `train_qlora.py`. Pipeline không
-gọi API. `--device` của retrieval và `device_map` của reranker đều tự chọn phần
-cứng; `--batch-size` vẫn mở để tận dụng GPU Kaggle đang cấp.
+Trên Kaggle, Colab, chỉ cần cài đặt các requirement như bm25, faiss-cpu
 
 ## Chạy
 
 Từ thư mục gốc project:
 
 ```powershell
+# Tạo chunks 
 python codebase/legalir.py prepare
+
+# Tách tập train.json thành 70/30 train-validation
 python codebase/legalir.py split
+
+# Tạo index cho bm25, sử dụng bm25 cho phần heading và text trong chunk
 python codebase/legalir.py build-bm25
+
+# Tạo index cho dense retrieval 
 python codebase/legalir.py build-dense --model AITeamVN/Vietnamese_Embedding_v2
+
+# Đánh giá kết quả khi không có reranker (Cần tinh chỉnh các hệ số, --help để biết rõ hơn)
+# Mặc định nó chỉ chấm R@5, nếu quá 5 đáp án thì mặc định 0 điểm
 python codebase/legalir.py evaluate
+
+# Tạo submission không cần reranker
 python codebase/legalir.py predict
 ```
 
@@ -56,7 +61,7 @@ Kết quả mặc định nằm trong `codebase/artifacts/`. `predict` tạo c�
 Các tham số cần ablation trước:
 
 ```powershell
-python codebase/legalir.py evaluate --top-n 2 --heading-weight 1.5 --body-weight 1.0 --dense-weight 1.0 --rrf-k 60
+python codebase/legalir.py evaluate --top-n 2 --heading-weight 1 --body-weight 4 --dense-weight 5 --rrf-k 10
 ```
 
 - `--top-n`: số chunk tốt nhất được lấy trung bình thành document score.
@@ -64,26 +69,24 @@ python codebase/legalir.py evaluate --top-n 2 --heading-weight 1.5 --body-weight
 - `--rrf-k`: hằng số RRF.
 - `--top-chunks`: số chunk mỗi retriever trả về trước khi gộp document.
 
-## Kiểm thử
-
-```powershell
-python -m unittest discover -s codebase -p "test_*.py"
-```
+## Index
 
 `index_manifest.json` lưu checksum chunk, cấu hình BM25, model/revision, chiều vector
 và max length. Evaluate/predict từ chối chạy nếu index không khớp `chunks.jsonl`.
 
 ## Qwen3-0.6B zero-shot / Unsloth QLoRA reranker
 
-Reranker chấm độc lập từng cặp câu hỏi–chunk trên thang 0–5. Vì `train.json`
-chỉ cho biết document đúng, dữ liệu fine-tune dùng nhãn `5` cho positive và `0`
-cho hard negative; các mức 1–4 chỉ được mô hình zero-shot suy ra.
+Reranker chấm độc lập từng cặp câu hỏi–chunk trên thang 0–5. 
 
 Điểm cuối của document kết hợp hai tín hiệu đã chuẩn hóa:
 
 ```text
 qwen_normalized      = max(expected_grade_của_các_chunk) / 5
 retrieval_normalized = min-max(document_score) trong từng câu hỏi
+```
+Sử dụng weighting cho từng điểm số final score, với mặc định tỉ lệ 6/4:
+
+```text
 final_score          = 0.6 * qwen_normalized + 0.4 * retrieval_normalized
 ```
 
@@ -96,25 +99,41 @@ và `0.6 0.4` là tương đương.
 
 `legalir.py candidates` xuất document cùng các chunk đã chọn. Trong mỗi document
 `D`, chunk được xếp hạng riêng bằng BM25 heading, BM25 body và dense cosine/IP,
-rồi hợp nhất theo: `0.5/(4+r_heading) + 2/(4+r_body) + 4/(4+r_dense)`. Mỗi
-document giữ tối đa hai chunk có score `>= 0.4`. Các CLI tương ứng là
+rồi hợp nhất bằng RRF score. Mỗi document giữ tối đa hai chunk có score `>= 0.4`. Các CLI tương ứng là
 `--chunk-heading-weight`, `--chunk-body-weight`, `--chunk-dense-weight`,
 `--chunk-rrf-k`, `--chunk-threshold` và `--chunks-per-document` (chỉ nhận 1 hoặc
 2). Với tập có gold answer, document đúng bị retrieval bỏ sót vẫn được thêm vào
 candidate với `retrieved=false` để tạo positive training pair mà không làm tăng
 Recall giả.
 
-```powershell
-python -m pip install -r codebase/requirements-legalir.txt
-python -m pip install -r codebase/requirements-qlora.txt
+## training (đang test - không cần chạy)
 
+Train bằng cách để model học phân biệt đâu là document với chunk đúng, trả lời được câu hỏi (positive) và document với chunk không trả lời được câu hỏi (negative)
+
+Mặc định ta đã tải dependency của legalir.txt theo hướng dẫn trên, ta tiến hành tải dependency như sau:
+```powershell
+# Tải Dependency
+python -m pip install -r codebase/requirements-qlora.txt
+```
+
+Các bước train:
+```text
+chuẩn bị train/test -> tạo câu trả lời mẫu bằng retrieve không rerank -> tạo các cặp positive/negative -> training
+```
+
+```powershell 
+# Split Train-Test
 python codebase/legalir.py split
+
+# Tạo ra các đáp án mẫu, mặc định chọn 20 documents cho mỗi question
 python codebase/legalir.py candidates --questions codebase/artifacts/split/train.json --output codebase/artifacts/train_candidates.json --top-documents 20
 python codebase/legalir.py candidates --questions codebase/artifacts/split/validation.json --output codebase/artifacts/validation_candidates.json --top-documents 20
 
+# Tạo ra các cặp positive-negative để training
 python codebase/train_qlora.py prepare --questions codebase/artifacts/split/train.json --candidates codebase/artifacts/train_candidates.json --output codebase/artifacts/train_pairs.jsonl
 python codebase/train_qlora.py prepare --questions codebase/artifacts/split/validation.json --candidates codebase/artifacts/validation_candidates.json --output codebase/artifacts/validation_pairs.jsonl
 
+# chạy training
 accelerate launch --num_processes 2 codebase/train_qlora.py train --train-pairs codebase/artifacts/train_pairs.jsonl --validation-pairs codebase/artifacts/validation_pairs.jsonl
 ```
 
@@ -124,19 +143,23 @@ candidate. Sau khi đổi weight/threshold, phải chạy lại `legalir.py cand
 rồi tạo lại pair; mỗi pair giữ `retrieved` để Recall@5 không tính positive được
 chèn vào để huấn luyện.
 
-Trên Kaggle, bắt đầu bằng session mới, cài requirements một lần rồi restart
-session nếu pip yêu cầu. Không force-reinstall riêng Torch/Transformers/PEFT vì
-Unsloth quản lý bộ phiên bản tương thích. Pipeline text không cần `torchvision`
-hoặc `torchaudio`.
-
 So sánh cùng prompt và cách tính xác suất grade. Không truyền `--adapter` là
 zero-shot; truyền adapter là kết quả fine-tune:
 
 ```powershell
+# rerank không fine-tune, dùng để validation
 python codebase/train_qlora.py rerank --questions codebase/artifacts/split/validation.json --candidates codebase/artifacts/validation_candidates.json --output codebase/artifacts/qwen3-0.6b-validation.json
-python codebase/legalir.py candidates --questions public-official.json --output codebase/artifacts/public_candidates.json --top-documents 20
+
+# rerank không fine-tune, dùng để submisison
 python codebase/train_qlora.py rerank --questions public-official.json --candidates codebase/artifacts/public_candidates.json --output codebase/artifacts/qwen3-0.6b-public.json --submission codebase/artifacts/submission.json
+
+# rerank có fine-tune, dùng cho evaluation
 python codebase/train_qlora.py rerank --questions codebase/artifacts/split/validation.json --candidates codebase/artifacts/validation_candidates.json --adapter codebase/artifacts/qlora/final_adapter --output codebase/artifacts/finetuned_rerank.json
+
+# rerank có fine-tune, dùng cho submission:
+python codebase/train_qlora.py rerank --questions public-official.json --candidates codebase/artifacts/public_candidates.json --adapter codebase/artifacts/qlora/final_adapter --output codebase/artifacts/qwen3-0.6b-public.json --submission codebase/artifacts/submission.json
+
+# merge qlora và qwen để tạo thành 1 model cuối
 python codebase/train_qlora.py merge --adapter codebase/artifacts/qlora/final_adapter --output codebase/artifacts/qwen3-0.6b-legalir-merged
 ```
 
